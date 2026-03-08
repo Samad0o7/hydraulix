@@ -8,7 +8,7 @@ const state = {
   drag: null,
   lastRun: null,
   phase2: { network: null, weir: null, sensitivity: null },
-  phase3: { calibration: null, uncertainty: null, scenarios: [], comparisons: null, versions: [], approvals: [] },
+  phase3: { calibration: null, uncertainty: null, dynamic: null, scenarios: [], comparisons: null, versions: [], approvals: [] },
 };
 
 const fittingCatalog = [
@@ -63,13 +63,19 @@ const el = {
   compareScenariosBtn: document.getElementById("compareScenariosBtn"),
   saveVersionBtn: document.getElementById("saveVersionBtn"),
   requestApprovalBtn: document.getElementById("requestApprovalBtn"),
+  runDynamicBtn: document.getElementById("runDynamicBtn"),
   phase3Output: document.getElementById("phase3Output"),
+  dynamicChart: document.getElementById("dynamicChart"),
   obsSwl: document.getElementById("obsSwl"),
   mcSamples: document.getElementById("mcSamples"),
   flowStdPct: document.getElementById("flowStdPct"),
   roughStdPct: document.getElementById("roughStdPct"),
   userRole: document.getElementById("userRole"),
   approvalStatus: document.getElementById("approvalStatus"),
+  dynHours: document.getElementById("dynHours"),
+  dynStepMin: document.getElementById("dynStepMin"),
+  dynPeakFactor: document.getElementById("dynPeakFactor"),
+  dynTopNodes: document.getElementById("dynTopNodes"),
 };
 
 function uid(prefix) {
@@ -125,6 +131,8 @@ function addNode(name, x, y, invert = 100, toc = 104, swl = null, nodeType = "ju
       normalOperation: true,
       hydraulicBreak: nodeType === "weir",
     },
+    storageArea: 800,
+    externalInflow: 0,
     notes: "",
   };
   state.nodes.push(node);
@@ -330,6 +338,8 @@ function renderInspectorInputs() {
         <label>TOC (m)<input data-node-key="toc" type="number" step="0.01" value="${n.toc}" /></label>
         <label>SWL Initial (m)<input data-node-key="swl" type="number" step="0.01" value="${n.swl ?? ""}" /></label>
         <label>Node Demand (m³/s)<input data-node-key="demand" type="number" step="0.001" value="${n.demand ?? 0}" /></label>
+        <label>Storage area (m²)<input data-node-key="storageArea" type="number" step="1" min="1" value="${n.storageArea ?? 800}" /></label>
+        <label>External inflow base (m³/s)<input data-node-key="externalInflow" type="number" step="0.001" value="${n.externalInflow ?? 0}" /></label>
       </div>
       ${n.nodeType === "weir" ? `<div class="inspector-card"><strong>Weir equipment controls (hydraulic break)</strong>
         <div class="grid">
@@ -694,8 +704,8 @@ function applyHydraulicBreak(nodeRow, Q) {
   return true;
 }
 
-function computeProfileRun({ Q, alpha, direction, boundary, links }) {
-  const nodes = sortProfileNodes();
+function computeProfileRun({ Q, alpha, direction, boundary, links, nodesOverride = null }) {
+  const nodes = (nodesOverride ? [...nodesOverride] : sortProfileNodes()).sort((a, b) => a.x - b.x);
   const nodeMap = new Map(nodes.map((n) => [n.id, { ...n, swl: Number.isFinite(n.swl) ? n.swl : null, hgl: null, egl: null, hydraulicBreakApplied: false }]));
   const linkResults = [];
   const pairSegments = [];
@@ -1030,6 +1040,134 @@ function compareScenarios() {
   setPhase3Output(cmp, "Scenario comparison");
 }
 
+
+
+function drawDynamicChart(dynamicResult) {
+  const canvas = el.dynamicChart;
+  if (!canvas || !dynamicResult || !dynamicResult.timesHr?.length) return;
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width;
+  const H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const pad = { l: 52, r: 16, t: 12, b: 28 };
+  const times = dynamicResult.timesHr;
+  const series = dynamicResult.trackedNodes;
+  const allY = series.flatMap((n) => n.swlSeries);
+  const ymin = Math.min(...allY) - 0.2;
+  const ymax = Math.max(...allY) + 0.2;
+  const xPix = (x) => pad.l + (x / (times.at(-1) || 1)) * (W - pad.l - pad.r);
+  const yPix = (y) => H - pad.b - ((y - ymin) / (ymax - ymin || 1)) * (H - pad.t - pad.b);
+
+  ctx.strokeStyle = "#c8d1df";
+  ctx.strokeRect(pad.l, pad.t, W - pad.l - pad.r, H - pad.t - pad.b);
+
+  const colors = ["#0059c9", "#c23b22", "#1b8a3b", "#6f42c1", "#0f766e", "#a16207"];
+  ctx.font = "12px Arial";
+  series.forEach((nodeSeries, idx) => {
+    ctx.beginPath();
+    nodeSeries.swlSeries.forEach((y, i) => {
+      const x = xPix(times[i]);
+      const yy = yPix(y);
+      if (i === 0) ctx.moveTo(x, yy);
+      else ctx.lineTo(x, yy);
+    });
+    ctx.strokeStyle = colors[idx % colors.length];
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = colors[idx % colors.length];
+    ctx.fillRect(pad.l + 8, pad.t + 8 + idx * 15, 10, 3);
+    ctx.fillStyle = "#222";
+    ctx.fillText(`${nodeSeries.nodeId} ${nodeSeries.name}`, pad.l + 24, pad.t + 11 + idx * 15);
+  });
+
+  ctx.fillStyle = "#222";
+  ctx.fillText("Time (hr)", W / 2 - 25, H - 8);
+}
+
+function runDynamicSimulation() {
+  if (state.nodes.length < 2 || state.links.length < 1) {
+    setPhase3Output({ error: "Need at least two nodes and one link." }, "Dynamic simulation");
+    return;
+  }
+
+  const durationHr = Number(el.dynHours.value);
+  const dtMin = Number(el.dynStepMin.value);
+  const peak = Number(el.dynPeakFactor.value);
+  const topNodes = Math.max(1, Number(el.dynTopNodes.value));
+  const dtSec = dtMin * 60;
+  const steps = Math.max(1, Math.floor((durationHr * 60) / dtMin));
+  const baseQ = Number(el.flow.value);
+
+  const current = new Map(state.nodes.map((n) => [n.id, Number.isFinite(n.swl) ? n.swl : n.invert + 1]));
+  const series = new Map(state.nodes.map((n) => [n.id, []]));
+  const floodAt = new Map(state.nodes.map((n) => [n.id, null]));
+  const timesHr = [];
+
+  for (let k = 0; k <= steps; k++) {
+    const tHr = (k * dtMin) / 60;
+    timesHr.push(tHr);
+    const stormShape = Math.sin(Math.PI * (tHr / durationHr));
+    const factor = 1 + Math.max(0, stormShape) * (peak - 1);
+    const q = baseQ * factor;
+
+    const nodesOverride = state.nodes.map((n) => ({ ...n, swl: current.get(n.id) }));
+    let profile;
+    try {
+      profile = computeProfileRun({
+        Q: q,
+        alpha: Number(el.alpha.value),
+        direction: el.calcDirection.value,
+        boundary: Number(el.boundarySwl.value),
+        links: state.links,
+        nodesOverride,
+      });
+    } catch (err) {
+      setPhase3Output({ error: err.message || "Profile failed during dynamic run." }, "Dynamic simulation");
+      return;
+    }
+
+    const byId = new Map(profile.nodeResults.map((r) => [r.id, r]));
+    for (const n of state.nodes) {
+      const target = byId.get(n.id).swl;
+      const area = Math.max(1, Number(n.storageArea || 800));
+      const extIn = Number(n.externalInflow || 0) * factor;
+      const tau = 1800;
+      const dsStorage = (extIn / area) * dtSec;
+      const dsHydraulic = ((target - current.get(n.id)) / tau) * dtSec;
+      const next = current.get(n.id) + dsStorage + dsHydraulic;
+      current.set(n.id, next);
+      series.get(n.id).push(next);
+      if (floodAt.get(n.id) === null && next >= n.toc) floodAt.set(n.id, tHr);
+    }
+  }
+
+  const ranked = state.nodes
+    .map((n) => ({ n, maxSwl: Math.max(...series.get(n.id)) }))
+    .sort((a, b) => b.maxSwl - a.maxSwl)
+    .slice(0, topNodes);
+
+  const trackedNodes = ranked.map(({ n, maxSwl }) => ({
+    nodeId: n.nodeId,
+    name: n.name,
+    maxSwl,
+    floodTimeHr: floodAt.get(n.id),
+    swlSeries: series.get(n.id),
+  }));
+
+  const summary = {
+    durationHr,
+    dtMin,
+    peakFactor: peak,
+    floodedNodes: trackedNodes.filter((x) => x.floodTimeHr !== null).map((x) => ({ nodeId: x.nodeId, timeHr: x.floodTimeHr })),
+    trackedNodes,
+  };
+
+  state.phase3.dynamic = summary;
+  setPhase3Output(summary, "Dynamic SWL / flooding simulation");
+  drawDynamicChart({ timesHr, trackedNodes });
+}
+
 function saveVersion() {
   const version = {
     version: `v${state.phase3.versions.length + 1}`,
@@ -1097,9 +1235,11 @@ el.clearBtn.addEventListener("click", () => {
   state.selected = null;
   state.lastRun = null;
   state.phase2 = { network: null, weir: null, sensitivity: null };
-  state.phase3 = { calibration: null, uncertainty: null, scenarios: [], comparisons: null, versions: [], approvals: [] };
+  state.phase3 = { calibration: null, uncertainty: null, dynamic: null, scenarios: [], comparisons: null, versions: [], approvals: [] };
   el.phase2Output.textContent = "Phase 2 output will appear here.";
   el.phase3Output.textContent = "Phase 3 output will appear here.";
+  const dctx = el.dynamicChart?.getContext("2d");
+  if (dctx) dctx.clearRect(0, 0, el.dynamicChart.width, el.dynamicChart.height);
   el.resultBody.innerHTML = "";
   const ctx = el.chart.getContext("2d");
   ctx.clearRect(0, 0, el.chart.width, el.chart.height);
@@ -1120,6 +1260,7 @@ el.saveScenarioBtn.addEventListener("click", saveScenarioSnapshot);
 el.compareScenariosBtn.addEventListener("click", compareScenarios);
 el.saveVersionBtn.addEventListener("click", saveVersion);
 el.requestApprovalBtn.addEventListener("click", requestApproval);
+el.runDynamicBtn.addEventListener("click", runDynamicSimulation);
 
 seedDemo();
 setActiveTab("inputs");

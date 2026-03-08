@@ -39,6 +39,8 @@ class Node(BaseModel):
     toc: float
     swl: Optional[float] = None
     demand: float = 0.0
+    storage_area: float = Field(default=800.0, gt=0)
+    external_inflow: float = 0.0
     node_type: NodeType = "junction"
     equipment: Optional[WeirEquipment] = None
 
@@ -98,3 +100,29 @@ class WeirRequest(BaseModel):
 
 class WeirResponse(BaseModel):
     discharge_q: float
+
+
+class DynamicRequest(BaseModel):
+    nodes: List[Node]
+    links: List[Link]
+    base_flow_q: float = Field(gt=0)
+    alpha: float = Field(default=1.0, ge=1.0)
+    direction: Literal["forward", "backward"] = "forward"
+    boundary_swl: float
+    duration_hours: float = Field(gt=0)
+    dt_minutes: float = Field(gt=0)
+    storm_peak_factor: float = Field(default=2.0, ge=1.0)
+
+
+class DynamicNodeSeries(BaseModel):
+    id: str
+    name: str
+    times_hr: List[float]
+    swl: List[float]
+    flood_time_hr: Optional[float] = None
+
+
+class DynamicResponse(BaseModel):
+    duration_hours: float
+    dt_minutes: float
+    node_series: List[DynamicNodeSeries]

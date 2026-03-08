@@ -7,6 +7,7 @@ EQUATION_REFERENCES = {
     "minor_losses": "Standard K-method h_m = K*v^2/(2g)",
     "weir_rectangular": "Sharp-crested rectangular weir relation Q=(2/3)C_d b sqrt(2g) H^(3/2)",
     "newton_raphson": "Mays, Water Distribution Systems; nodal-head Newton approach",
+    "dynamic_storage_routing": "Level-pool / continuity-based storage routing (Hydrologic routing practice)",
 }
 
 MODULE_REFERENCES = {

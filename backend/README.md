@@ -7,7 +7,7 @@ This backend is the engineering calculation authority (Python), aligned with the
 - `hydraulix_engine/equations.py`: canonical engineering equations (Manning, Hazen-Williams, minor losses, rectangular weir).
 - `hydraulix_engine/solver.py`: profile solver with segmented links, weir hydraulic-break handling, chainage/freeboard outputs.
 - `hydraulix_engine/references.py`: explicit equation/model/module citations.
-- `api.py`: FastAPI endpoints (`/profile`, `/weir`, `/references`, `/health`).
+- `api.py`: FastAPI endpoints (`/profile`, `/dynamic`, `/weir`, `/references`, `/health`).
 
 ## Equations and model citations
 The API exposes references at `GET /references`.
@@ -17,6 +17,7 @@ Primary equations currently used:
 - Manning: `Q = (1/n) A R^(2/3) S^(1/2)` and rearranged slope/headloss for segment solve.
 - Minor loss K-method: `h_m = K v^2/(2g)`.
 - Sharp-crested rectangular weir: `Q = (2/3) C_d b sqrt(2g) H^(3/2)`.
+- Dynamic storage routing (continuity/level-pool style): `dS/dt = Qin - Qout`, with `dS = A * dh` for node storage updates.
 
 ## Run
 ```bash

@@ -122,6 +122,19 @@
               <option value="approved">Approved</option>
             </select>
           </label>
+          <label>Dynamic duration (hours)
+            <input id="dynHours" type="number" value="6" step="0.5" min="0.5" />
+          </label>
+          <label>Dynamic step (min)
+            <input id="dynStepMin" type="number" value="5" step="1" min="1" />
+          </label>
+          <label>Storm peak factor
+            <input id="dynPeakFactor" type="number" value="2.5" step="0.1" min="1" />
+          </label>
+          <label>Nodes graphed
+            <input id="dynTopNodes" type="number" value="4" step="1" min="1" />
+          </label>
+
         </div>
         <div class="controls">
           <button id="runCalibrationBtn">Run Calibration (fit roughness)</button>
@@ -130,8 +143,10 @@
           <button id="compareScenariosBtn">Compare Scenarios</button>
           <button id="saveVersionBtn">Save Version</button>
           <button id="requestApprovalBtn">Request Approval</button>
+          <button id="runDynamicBtn">Run Dynamic SWL/Flood Simulation</button>
         </div>
         <pre id="phase3Output" class="phase3-output">Phase 3 output will appear here.</pre>
+        <canvas id="dynamicChart" width="1200" height="320"></canvas>
       </section>
 
       <section class="panel outputs">

@@ -60,6 +60,14 @@ main {
   white-space: pre-wrap;
 }
 
+#dynamicChart {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  margin-top: 0.6rem;
+}
+
 
 .controls { display: flex; gap: 0.5rem; margin: 0.6rem 0; flex-wrap: wrap; }
 button {

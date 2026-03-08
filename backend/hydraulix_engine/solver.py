@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import math
 from typing import Dict, List
 
 from .equations import G, area_circular, friction_loss_segment, weir_flow_to_head
-from .models import Link, LinkResult, Node, NodeResult, ProfileRequest, ProfileResponse, SegmentResult
+from .models import DynamicNodeSeries, DynamicRequest, DynamicResponse, Link, LinkResult, Node, NodeResult, ProfileRequest, ProfileResponse, SegmentResult
 
 
 def _pair_key(a: str, b: str) -> str:
@@ -133,3 +134,66 @@ def compute_profile(req: ProfileRequest) -> ProfileResponse:
     ]
 
     return ProfileResponse(node_results=node_results, link_results=link_results)
+
+
+
+def compute_dynamic(req: DynamicRequest) -> DynamicResponse:
+    dt_sec = req.dt_minutes * 60.0
+    steps = max(1, int((req.duration_hours * 60.0) / req.dt_minutes))
+
+    current = {n.id: (n.swl if n.swl is not None else n.invert + 1.0) for n in req.nodes}
+    series = {n.id: [] for n in req.nodes}
+    times = []
+    flood_at = {n.id: None for n in req.nodes}
+
+    for k in range(steps + 1):
+        t_hr = (k * req.dt_minutes) / 60.0
+        times.append(t_hr)
+        storm_shape = max(0.0, math.sin(math.pi * (t_hr / req.duration_hours)))
+        factor = 1.0 + storm_shape * (req.storm_peak_factor - 1.0)
+        q = req.base_flow_q * factor
+
+        nodes_step = []
+        for n in req.nodes:
+            if hasattr(n, "model_copy"):
+                nodes_step.append(n.model_copy(update={"swl": current[n.id]}))
+            else:
+                nodes_step.append(n.copy(update={"swl": current[n.id]}))
+
+        prof = compute_profile(
+            ProfileRequest(
+                nodes=nodes_step,
+                links=req.links,
+                flow_q=q,
+                alpha=req.alpha,
+                direction=req.direction,
+                boundary_swl=req.boundary_swl,
+            )
+        )
+        by_id = {r.id: r for r in prof.node_results}
+
+        for n in req.nodes:
+            target = by_id[n.id].swl
+            area = max(1.0, n.storage_area)
+            ext = n.external_inflow * factor
+            tau = 1800.0
+            ds = (ext / area) * dt_sec + ((target - current[n.id]) / tau) * dt_sec
+            current[n.id] += ds
+            series[n.id].append(current[n.id])
+            if flood_at[n.id] is None and current[n.id] >= n.toc:
+                flood_at[n.id] = t_hr
+
+    return DynamicResponse(
+        duration_hours=req.duration_hours,
+        dt_minutes=req.dt_minutes,
+        node_series=[
+            DynamicNodeSeries(
+                id=n.id,
+                name=n.name,
+                times_hr=times,
+                swl=series[n.id],
+                flood_time_hr=flood_at[n.id],
+            )
+            for n in req.nodes
+        ],
+    )

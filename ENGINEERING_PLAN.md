@@ -209,3 +209,14 @@ Per agreement, engineering calculations should run in **Python backend modules**
 - explicit equation/module references.
 
 This keeps the web UI as the model editor while Python is the calculation authority for engineering traceability and auditability.
+
+## 12) Dynamic flood-tracking module (event simulation)
+
+Add a dynamic SWL module for storm/flood scenarios using time-stepping over user-defined duration (typically hours):
+- user defines duration and timestep,
+- apply storm flow multiplier/hydrograph to inflow,
+- compute hydraulic targets each step from headloss/profile equations,
+- update storage-node water levels via continuity-style routing (`dS/dt = Qin - Qout`, `dS = A*dh`),
+- track flood onset time where `SWL >= TOC` for tanks/ponds.
+
+This module should output node-by-node SWL time series and flood timestamps, plus charts for operational review.
