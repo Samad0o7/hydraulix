@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from hydraulix_engine.equations import weir_head_to_flow
 from hydraulix_engine.models import DynamicRequest, DynamicResponse, ProfileRequest, ProfileResponse, WeirRequest, WeirResponse, WeirEquipment
@@ -6,6 +7,14 @@ from hydraulix_engine.references import EQUATION_REFERENCES, MODULE_REFERENCES
 from hydraulix_engine.solver import compute_dynamic, compute_profile
 
 app = FastAPI(title="Hydraulix Engineering Backend", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")

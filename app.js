@@ -78,6 +78,92 @@ const el = {
   dynTopNodes: document.getElementById("dynTopNodes"),
 };
 
+
+const API_BASE = window.HYDRAULIX_API_BASE || "http://127.0.0.1:8000";
+
+async function postJson(path, payload) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`API ${path} failed: ${res.status} ${txt}`);
+  }
+  return res.json();
+}
+
+function toBackendNodes(nodes) {
+  return nodes.map((n) => ({
+    id: n.id,
+    name: n.name,
+    x: n.x,
+    y: n.y,
+    invert: n.invert,
+    toc: n.toc,
+    swl: n.swl,
+    demand: Number(n.demand || 0),
+    storage_area: Number(n.storageArea || 800),
+    external_inflow: Number(n.externalInflow || 0),
+    node_type: n.nodeType || "junction",
+    equipment: n.nodeType === "weir"
+      ? {
+          crest_level: Number(n.equipment?.crestLevel ?? (n.invert + 0.8)),
+          width: Number(n.equipment?.width ?? 1.2),
+          cd: Number(n.equipment?.cd ?? 0.62),
+          normal_operation: Boolean(n.equipment?.normalOperation ?? true),
+          hydraulic_break: Boolean(n.equipment?.hydraulicBreak ?? true),
+        }
+      : null,
+  }));
+}
+
+function toBackendLinks(links) {
+  return links.map((l) => ({
+    id: l.id,
+    name: l.name,
+    from_id: l.fromId,
+    to_id: l.toId,
+    segments: l.segments.map((seg) => ({
+      length: Number(seg.length),
+      diameter: Number(seg.diameter),
+      flow_type: seg.flowType,
+      manning_n: Number(seg.manningN),
+      hazen_c: Number(seg.hazenC),
+      dummy_loss: Number(seg.dummyLoss || 0),
+      fittings: { values: { ...seg.fittingsCount } },
+    })),
+  }));
+}
+
+function fromBackendProfile(profile) {
+  const nodeById = new Map(state.nodes.map((n) => [n.id, n]));
+  return {
+    nodeResults: profile.node_results.map((r) => {
+      const base = nodeById.get(r.id);
+      return {
+        ...r,
+        nodeId: base?.nodeId || r.id,
+        invert: base?.invert ?? 0,
+        toc: base?.toc ?? 0,
+        hydraulicBreakApplied: r.hydraulic_break_applied,
+      };
+    }),
+    linkResults: profile.link_results.map((l) => ({
+      id: l.id,
+      name: l.name,
+      hTotal: l.h_total,
+      segmentResults: l.segment_results.map((s) => ({
+        hf: s.hf,
+        hm: s.hm,
+        hTotal: s.h_total,
+        method: s.method,
+      })),
+    })),
+  };
+}
+
 function uid(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -586,24 +672,44 @@ function pairRepresentativeDistance(links) {
   return Math.max(...links.map((l) => totalLinkLength(l)));
 }
 
-function runProfile() {
+async function runProfile() {
   if (state.nodes.length < 2 || state.links.length < 1) {
     alert("Add at least two nodes and one link.");
     return;
   }
 
-  const Q = Number(el.flow.value);
-  const alpha = Number(el.alpha.value);
-  const direction = el.calcDirection.value;
-  const boundary = Number(el.boundarySwl.value);
+  const req = {
+    nodes: toBackendNodes(state.nodes),
+    links: toBackendLinks(state.links),
+    flow_q: Number(el.flow.value),
+    alpha: Number(el.alpha.value),
+    direction: el.calcDirection.value,
+    boundary_swl: Number(el.boundarySwl.value),
+  };
 
   try {
-    const result = computeProfileRun({ Q, alpha, direction, boundary, links: state.links });
+    const profile = await postJson("/profile", req);
+    const result = fromBackendProfile(profile);
     state.lastRun = result;
     renderResults(result.nodeResults);
     renderInspectorResults();
   } catch (err) {
-    alert(err.message || "Profile run failed");
+    // Fallback for environments where Python API dependencies are unavailable.
+    try {
+      const local = computeProfileRun({
+        Q: Number(el.flow.value),
+        alpha: Number(el.alpha.value),
+        direction: el.calcDirection.value,
+        boundary: Number(el.boundarySwl.value),
+        links: state.links,
+      });
+      state.lastRun = local;
+      renderResults(local.nodeResults);
+      renderInspectorResults();
+      setPhase2Output({ warning: err.message, fallback: "local-profile" }, "Backend unavailable; used local profile fallback");
+    } catch (fallbackErr) {
+      alert(fallbackErr.message || err.message || "Profile run failed");
+    }
   }
 }
 
@@ -884,13 +990,24 @@ function runNetworkSolver() {
   setPhase2Output(state.phase2.network, "Network solver result");
 }
 
-function runWeirCalculation() {
-  const b = Number(el.weirB.value);
-  const H = Number(el.weirH.value);
-  const Cd = Number(el.weirCd.value);
-  const Q = (2 / 3) * Cd * b * Math.sqrt(2 * g) * (H ** 1.5);
-  state.phase2.weir = { Cd, b, H, Q };
-  setPhase2Output(state.phase2.weir, "Weir result");
+async function runWeirCalculation() {
+  try {
+    const payload = {
+      cd: Number(el.weirCd.value),
+      width: Number(el.weirB.value),
+      head: Number(el.weirH.value),
+    };
+    const res = await postJson("/weir", payload);
+    state.phase2.weir = { ...payload, Q: res.discharge_q };
+    setPhase2Output(state.phase2.weir, "Weir result (Python backend)");
+  } catch (err) {
+    const cd = Number(el.weirCd.value);
+    const b = Number(el.weirB.value);
+    const h = Number(el.weirH.value);
+    const q = (2 / 3) * cd * b * Math.sqrt(2 * g) * (h ** 1.5);
+    state.phase2.weir = { cd, width: b, head: h, Q: q, fallback: true };
+    setPhase2Output(state.phase2.weir, "Weir result (local fallback)");
+  }
 }
 
 function runSensitivity() {
@@ -1085,87 +1202,125 @@ function drawDynamicChart(dynamicResult) {
   ctx.fillText("Time (hr)", W / 2 - 25, H - 8);
 }
 
-function runDynamicSimulation() {
+async function runDynamicSimulation() {
   if (state.nodes.length < 2 || state.links.length < 1) {
     setPhase3Output({ error: "Need at least two nodes and one link." }, "Dynamic simulation");
     return;
   }
 
-  const durationHr = Number(el.dynHours.value);
-  const dtMin = Number(el.dynStepMin.value);
-  const peak = Number(el.dynPeakFactor.value);
-  const topNodes = Math.max(1, Number(el.dynTopNodes.value));
-  const dtSec = dtMin * 60;
-  const steps = Math.max(1, Math.floor((durationHr * 60) / dtMin));
-  const baseQ = Number(el.flow.value);
+  try {
+    const req = {
+      nodes: toBackendNodes(state.nodes),
+      links: toBackendLinks(state.links),
+      base_flow_q: Number(el.flow.value),
+      alpha: Number(el.alpha.value),
+      direction: el.calcDirection.value,
+      boundary_swl: Number(el.boundarySwl.value),
+      duration_hours: Number(el.dynHours.value),
+      dt_minutes: Number(el.dynStepMin.value),
+      storm_peak_factor: Number(el.dynPeakFactor.value),
+    };
 
-  const current = new Map(state.nodes.map((n) => [n.id, Number.isFinite(n.swl) ? n.swl : n.invert + 1]));
-  const series = new Map(state.nodes.map((n) => [n.id, []]));
-  const floodAt = new Map(state.nodes.map((n) => [n.id, null]));
-  const timesHr = [];
+    const res = await postJson("/dynamic", req);
+    const topNodes = Math.max(1, Number(el.dynTopNodes.value));
+    const ranked = [...res.node_series]
+      .map((n) => ({ ...n, max_swl: Math.max(...n.swl) }))
+      .sort((a, b) => b.max_swl - a.max_swl)
+      .slice(0, topNodes);
 
-  for (let k = 0; k <= steps; k++) {
-    const tHr = (k * dtMin) / 60;
-    timesHr.push(tHr);
-    const stormShape = Math.sin(Math.PI * (tHr / durationHr));
-    const factor = 1 + Math.max(0, stormShape) * (peak - 1);
-    const q = baseQ * factor;
+    const idToNode = new Map(state.nodes.map((n) => [n.id, n]));
+    const trackedNodes = ranked.map((n) => ({
+      nodeId: idToNode.get(n.id)?.nodeId || n.id,
+      name: n.name,
+      maxSwl: n.max_swl,
+      floodTimeHr: n.flood_time_hr,
+      swlSeries: n.swl,
+    }));
 
-    const nodesOverride = state.nodes.map((n) => ({ ...n, swl: current.get(n.id) }));
-    let profile;
+    const summary = {
+      durationHr: res.duration_hours,
+      dtMin: res.dt_minutes,
+      floodedNodes: trackedNodes
+        .filter((n) => n.floodTimeHr !== null)
+        .map((n) => ({ nodeId: n.nodeId, timeHr: n.floodTimeHr })),
+      trackedNodes,
+    };
+
+    state.phase3.dynamic = summary;
+    setPhase3Output(summary, "Dynamic SWL / flooding simulation (Python backend)");
+    drawDynamicChart({ timesHr: ranked[0]?.times_hr || [], trackedNodes });
+  } catch (err) {
+    // Local fallback dynamic simulation (same continuity-style logic used previously in UI).
     try {
-      profile = computeProfileRun({
-        Q: q,
-        alpha: Number(el.alpha.value),
-        direction: el.calcDirection.value,
-        boundary: Number(el.boundarySwl.value),
-        links: state.links,
-        nodesOverride,
-      });
-    } catch (err) {
-      setPhase3Output({ error: err.message || "Profile failed during dynamic run." }, "Dynamic simulation");
-      return;
-    }
+      const durationHr = Number(el.dynHours.value);
+      const dtMin = Number(el.dynStepMin.value);
+      const peak = Number(el.dynPeakFactor.value);
+      const topNodes = Math.max(1, Number(el.dynTopNodes.value));
+      const dtSec = dtMin * 60;
+      const steps = Math.max(1, Math.floor((durationHr * 60) / dtMin));
+      const baseQ = Number(el.flow.value);
+      const current = new Map(state.nodes.map((n) => [n.id, Number.isFinite(n.swl) ? n.swl : n.invert + 1]));
+      const series = new Map(state.nodes.map((n) => [n.id, []]));
+      const floodAt = new Map(state.nodes.map((n) => [n.id, null]));
+      const timesHr = [];
 
-    const byId = new Map(profile.nodeResults.map((r) => [r.id, r]));
-    for (const n of state.nodes) {
-      const target = byId.get(n.id).swl;
-      const area = Math.max(1, Number(n.storageArea || 800));
-      const extIn = Number(n.externalInflow || 0) * factor;
-      const tau = 1800;
-      const dsStorage = (extIn / area) * dtSec;
-      const dsHydraulic = ((target - current.get(n.id)) / tau) * dtSec;
-      const next = current.get(n.id) + dsStorage + dsHydraulic;
-      current.set(n.id, next);
-      series.get(n.id).push(next);
-      if (floodAt.get(n.id) === null && next >= n.toc) floodAt.set(n.id, tHr);
+      for (let k = 0; k <= steps; k++) {
+        const tHr = (k * dtMin) / 60;
+        timesHr.push(tHr);
+        const stormShape = Math.sin(Math.PI * (tHr / durationHr));
+        const factor = 1 + Math.max(0, stormShape) * (peak - 1);
+        const q = baseQ * factor;
+        const nodesOverride = state.nodes.map((n) => ({ ...n, swl: current.get(n.id) }));
+        const profile = computeProfileRun({
+          Q: q,
+          alpha: Number(el.alpha.value),
+          direction: el.calcDirection.value,
+          boundary: Number(el.boundarySwl.value),
+          links: state.links,
+          nodesOverride,
+        });
+        const byId = new Map(profile.nodeResults.map((r) => [r.id, r]));
+        for (const n of state.nodes) {
+          const target = byId.get(n.id).swl;
+          const area = Math.max(1, Number(n.storageArea || 800));
+          const extIn = Number(n.externalInflow || 0) * factor;
+          const tau = 1800;
+          const dsStorage = (extIn / area) * dtSec;
+          const dsHydraulic = ((target - current.get(n.id)) / tau) * dtSec;
+          const next = current.get(n.id) + dsStorage + dsHydraulic;
+          current.set(n.id, next);
+          series.get(n.id).push(next);
+          if (floodAt.get(n.id) === null && next >= n.toc) floodAt.set(n.id, tHr);
+        }
+      }
+
+      const ranked = state.nodes
+        .map((n) => ({ n, maxSwl: Math.max(...series.get(n.id)) }))
+        .sort((a, b) => b.maxSwl - a.maxSwl)
+        .slice(0, topNodes);
+
+      const trackedNodes = ranked.map(({ n, maxSwl }) => ({
+        nodeId: n.nodeId,
+        name: n.name,
+        maxSwl,
+        floodTimeHr: floodAt.get(n.id),
+        swlSeries: series.get(n.id),
+      }));
+
+      const summary = {
+        durationHr,
+        dtMin,
+        floodedNodes: trackedNodes.filter((x) => x.floodTimeHr !== null).map((x) => ({ nodeId: x.nodeId, timeHr: x.floodTimeHr })),
+        trackedNodes,
+        fallback: true,
+      };
+      state.phase3.dynamic = summary;
+      setPhase3Output({ warning: err.message, ...summary }, "Dynamic SWL / flooding simulation (local fallback)");
+      drawDynamicChart({ timesHr, trackedNodes });
+    } catch (fallbackErr) {
+      setPhase3Output({ error: fallbackErr.message || err.message || "Dynamic API failed" }, "Dynamic simulation");
     }
   }
-
-  const ranked = state.nodes
-    .map((n) => ({ n, maxSwl: Math.max(...series.get(n.id)) }))
-    .sort((a, b) => b.maxSwl - a.maxSwl)
-    .slice(0, topNodes);
-
-  const trackedNodes = ranked.map(({ n, maxSwl }) => ({
-    nodeId: n.nodeId,
-    name: n.name,
-    maxSwl,
-    floodTimeHr: floodAt.get(n.id),
-    swlSeries: series.get(n.id),
-  }));
-
-  const summary = {
-    durationHr,
-    dtMin,
-    peakFactor: peak,
-    floodedNodes: trackedNodes.filter((x) => x.floodTimeHr !== null).map((x) => ({ nodeId: x.nodeId, timeHr: x.floodTimeHr })),
-    trackedNodes,
-  };
-
-  state.phase3.dynamic = summary;
-  setPhase3Output(summary, "Dynamic SWL / flooding simulation");
-  drawDynamicChart({ timesHr, trackedNodes });
 }
 
 function saveVersion() {
