@@ -198,3 +198,14 @@ For the production backend (FastAPI solver service), use mature scientific modul
 Recommended approach:
 - Keep equations in a dedicated solver package and isolate third-party dependencies behind adapter layers.
 - Pin versions and create benchmark regression tests to lock engineering reproducibility.
+
+## 11) Backend implementation alignment note (Python)
+
+Per agreement, engineering calculations should run in **Python backend modules** (not only in browser UI). The repository now includes a Python backend structure under `backend/` with:
+- pydantic models,
+- equation library,
+- profile solver,
+- FastAPI endpoints,
+- explicit equation/module references.
+
+This keeps the web UI as the model editor while Python is the calculation authority for engineering traceability and auditability.
