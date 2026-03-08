@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hydraulix Phase 1</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Hydraulix — Phase 2 Prototype</h1>
+      <p>Phase 2 prototype: profile + Newton-Raphson network solver, weir calculator, sensitivity ranking, and report export.</p>
+    </header>
+
+    <main>
+      <section class="panel editor">
+        <h2>Network Editor</h2>
+        <div class="controls row">
+          <button id="addNodeBtn">Add Node</button>
+          <button id="addWeirNodeBtn">Add Weir Node</button>
+          <button id="addPipeBtn">Add Link</button>
+          <button id="seedBtn">Load Demo</button>
+          <button id="clearBtn" class="danger">Clear</button>
+          <button id="runBtn" class="primary">Run Profile Calculation</button>
+        </div>
+
+        <div class="grid compact-grid">
+          <label>Calc Mode
+            <select id="calcDirection">
+              <option value="forward">Forward (upstream → downstream)</option>
+              <option value="backward">Backward (downstream → upstream)</option>
+            </select>
+          </label>
+
+          <label>Flow Q (m³/s)
+            <input id="flow" type="number" value="0.2" step="0.01" min="0.001" />
+          </label>
+
+          <label>Known SWL Boundary (m)
+            <input id="boundarySwl" type="number" value="103" step="0.1" />
+          </label>
+
+          <label>Velocity head factor α
+            <input id="alpha" type="number" value="1" step="0.1" min="1" />
+          </label>
+        </div>
+
+        <div class="canvas-wrap">
+          <svg id="linkLayer"></svg>
+          <div id="canvas"></div>
+        </div>
+
+        <p class="hint">Click a node or a link to open inspector. Parallel links between same nodes are supported and drawn separately.</p>
+      </section>
+
+      <section class="panel inspector">
+        <h2>Selected Item Inspector</h2>
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="inputs">Inputs</button>
+          <button class="tab-btn" data-tab="results">Results</button>
+          <button class="tab-btn" data-tab="notes">Notes</button>
+        </div>
+
+        <div id="tab-inputs" class="tab-content active"></div>
+        <div id="tab-results" class="tab-content"></div>
+        <div id="tab-notes" class="tab-content"></div>
+      </section>
+
+      
+      <section class="panel phase2">
+        <h2>Phase 2 Tools</h2>
+        <div class="grid compact-grid">
+          <label>Weir crest width b (m)
+            <input id="weirB" type="number" value="1.2" step="0.1" min="0.01" />
+          </label>
+          <label>Weir head H (m)
+            <input id="weirH" type="number" value="0.45" step="0.01" min="0.01" />
+          </label>
+          <label>Weir discharge coeff C<sub>d</sub>
+            <input id="weirCd" type="number" value="0.62" step="0.01" min="0.1" />
+          </label>
+          <label>Sensitivity diameter delta (%)
+            <input id="sensPct" type="number" value="10" step="1" min="1" />
+          </label>
+        </div>
+        <div class="controls">
+          <button id="runNetworkBtn">Run Network Solver (Newton-Raphson)</button>
+          <button id="runWeirBtn">Compute Weir</button>
+          <button id="runSensitivityBtn">Run Sensitivity/Bottleneck</button>
+          <button id="exportReportBtn">Export Report (JSON)</button>
+        </div>
+        <pre id="phase2Output" class="phase2-output">Phase 2 output will appear here.</pre>
+      </section>
+
+      
+      <section class="panel phase3">
+        <h2>Phase 3 Tools</h2>
+        <div class="grid compact-grid">
+          <label>Observed downstream SWL (m)
+            <input id="obsSwl" type="number" value="101.4" step="0.01" />
+          </label>
+          <label>Uncertainty samples
+            <input id="mcSamples" type="number" value="150" step="10" min="20" />
+          </label>
+          <label>Flow stdev (% of mean)
+            <input id="flowStdPct" type="number" value="8" step="1" min="1" />
+          </label>
+          <label>Roughness stdev (% of mean)
+            <input id="roughStdPct" type="number" value="12" step="1" min="1" />
+          </label>
+          <label>User Role
+            <select id="userRole">
+              <option value="designer">Designer</option>
+              <option value="checker">Checker</option>
+              <option value="approver">Approver</option>
+            </select>
+          </label>
+          <label>Approval Status
+            <select id="approvalStatus">
+              <option value="draft">Draft</option>
+              <option value="in_review">In Review</option>
+              <option value="approved">Approved</option>
+            </select>
+          </label>
+          <label>Dynamic duration (hours)
+            <input id="dynHours" type="number" value="6" step="0.5" min="0.5" />
+          </label>
+          <label>Dynamic step (min)
+            <input id="dynStepMin" type="number" value="5" step="1" min="1" />
+          </label>
+          <label>Storm peak factor
+            <input id="dynPeakFactor" type="number" value="2.5" step="0.1" min="1" />
+          </label>
+          <label>Nodes graphed
+            <input id="dynTopNodes" type="number" value="4" step="1" min="1" />
+          </label>
+
+        </div>
+        <div class="controls">
+          <button id="runCalibrationBtn">Run Calibration (fit roughness)</button>
+          <button id="runUncertaintyBtn">Run Uncertainty (Monte Carlo)</button>
+          <button id="saveScenarioBtn">Save Scenario Snapshot</button>
+          <button id="compareScenariosBtn">Compare Scenarios</button>
+          <button id="saveVersionBtn">Save Version</button>
+          <button id="requestApprovalBtn">Request Approval</button>
+          <button id="runDynamicBtn">Run Dynamic SWL/Flood Simulation</button>
+        </div>
+        <pre id="phase3Output" class="phase3-output">Phase 3 output will appear here.</pre>
+        <canvas id="dynamicChart" width="1200" height="320"></canvas>
+      </section>
+
+      <section class="panel outputs">
+        <h2>Outputs</h2>
+        <canvas id="profileChart" width="900" height="320"></canvas>
+        <table id="resultTable">
+          <thead>
+            <tr>
+              <th>Node ID</th>
+              <th>Node Name</th>
+              <th>Chainage (m)</th>
+              <th>Invert</th>
+              <th>TOC</th>
+              <th>SWL</th>
+              <th>Freeboard (m)</th>
+              <th>Hydraulic Break</th>
+              <th>HGL</th>
+              <th>EGL</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
